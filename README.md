@@ -196,6 +196,23 @@ checkout link in the 3 hours before the payment). The Journey tab shows how each
 matching again** re-runs this for older payments.
 Refunds are subtracted from revenue.
 
+## Revenue attribution with Razorpay
+
+1. In Razorpay → Account & Settings → Webhooks, add `https://YOUR-HOST/api/webhooks/razorpay/SITE_ID`, type a secret, and select `payment.captured`, `order.paid`, `payment_link.paid`, `subscription.charged` and `refund.processed`. Paste the same secret into the site settings.
+2. Pass the visitor cookies as **notes** on the order, payment link, subscription, or the Checkout `notes` option:
+
+```
+const order = await rzp.orders.create({
+  amount: 49900, currency: 'INR',
+  notes: { ml_visitor_id: jar.get('ml_vid')?.value ?? '', ml_session_id: jar.get('ml_sid')?.value ?? '', ml_site_id: 'SITE_ID' },
+});
+```
+
+- Notes are read from the payment, order, payment link and subscription, so it doesn't matter which one you put them on. One payment firing several events (`payment.captured` + `order.paid`) is counted once.
+- **Payment links:** set `callback_url` to a page on your site with `callback_method: 'get'`. Razorpay adds `?razorpay_payment_id=…`, which links the payment to the visitor even without notes. Clicks on `rzp.io` / `razorpay.com` links also feed the timing fallback.
+- **One Razorpay account, several products:** every webhook receives every payment. Add `ml_site_id` to the notes, or list the site's `plink_…` / `plan_…` ids in settings, to count only this site's payments.
+- International payments are counted in INR using Razorpay's settled `base_amount` when the site currency is INR. A partial refund of an international payment is counted as a full refund.
+
 Other providers can use the generic API (the key is in site settings):
 
 ```bash

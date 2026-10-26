@@ -50,6 +50,8 @@ export function Settings({ siteId }: { siteId: string }) {
         currency: s.currency,
         dodo_webhook_secret: s.dodo_webhook_secret ?? '',
         dodo_product_ids: s.dodo_product_ids ?? '',
+        razorpay_webhook_secret: s.razorpay_webhook_secret ?? '',
+        razorpay_filter_ids: s.razorpay_filter_ids ?? '',
       });
     });
   }, [siteId]);
@@ -69,6 +71,7 @@ export function Settings({ siteId }: { siteId: string }) {
   if (!site) return null;
   const snippet = `<script\n  defer\n  data-website-id="${site.id}"\n  src="${origin}/js/script.js"\n></script>`;
   const webhookUrl = `${origin}/api/webhooks/dodo/${site.id}`;
+  const razorpayWebhookUrl = `${origin}/api/webhooks/razorpay/${site.id}`;
 
   return (
     <div className="mx-auto max-w-3xl space-y-5 px-4 py-8 sm:py-12">
@@ -211,6 +214,83 @@ const session = await dodo.checkoutSessions.create({
             <b>Recommended:</b> set your product's <b>return / redirect URL</b> in Dodo to a page on your site, e.g.{' '}
             <code>https://{site.domain}/thanks</code>. Dodo adds <code>?payment_id=…</code> to it, which lets Minilytics link the payment to
             the exact visitor even when metadata doesn't come through (for example with payment links).
+          </li>
+        </ol>
+      </Section>
+
+      <Section
+        title="Or connect Razorpay (revenue attribution)"
+        desc="Same attribution as Dodo, for Razorpay Checkout, Orders, Payment Links and Subscriptions."
+      >
+        <ol className="list-decimal space-y-4 pl-5 text-sm">
+          <li>
+            In Razorpay → <b>Account &amp; Settings → Webhooks</b>, add this URL, type a secret, and select{' '}
+            <code>payment.captured</code>, <code>order.paid</code>, <code>payment_link.paid</code>, <code>subscription.charged</code> and{' '}
+            <code>refund.processed</code>:
+            <div className="mt-2">
+              <Code>{razorpayWebhookUrl}</Code>
+            </div>
+          </li>
+          <li>
+            Paste the same <b>webhook secret</b> you typed in Razorpay:
+            <div className="mt-2 flex gap-2">
+              <input
+                className="input font-mono"
+                type="password"
+                placeholder="your webhook secret"
+                value={form.razorpay_webhook_secret ?? ''}
+                onChange={(e) => setForm({ ...form, razorpay_webhook_secret: e.target.value })}
+              />
+              <button
+                className="btn-dark"
+                onClick={() => save({ razorpay_webhook_secret: form.razorpay_webhook_secret ?? '' }, 'Webhook secret saved')}
+              >
+                Save
+              </button>
+            </div>
+            {site.razorpay_webhook_secret && <p className="mt-1 text-xs text-emerald-600">✓ Secret configured</p>}
+          </li>
+          <li>
+            <b>Selling more than one product from the same Razorpay account?</b> Razorpay sends every payment to every webhook. Either add{' '}
+            <code>ml_site_id: '{site.id}'</code> to the notes (below), or list this site's payment link (<code>plink_…</code>) and
+            subscription plan (<code>plan_…</code>) ids. Leave empty if the account only sells this site's products.
+            <div className="mt-2 flex gap-2">
+              <input
+                className="input font-mono"
+                placeholder="plink_abc123, plan_def456"
+                value={form.razorpay_filter_ids ?? ''}
+                onChange={(e) => setForm({ ...form, razorpay_filter_ids: e.target.value })}
+              />
+              <button className="btn-dark" onClick={() => save({ razorpay_filter_ids: form.razorpay_filter_ids ?? '' }, 'Filter saved')}>
+                Save
+              </button>
+            </div>
+          </li>
+          <li>
+            Pass the visitor cookies as <b>notes</b> when you create the order, payment link or subscription:
+            <div className="mt-2">
+              <Code>{`import Razorpay from 'razorpay';
+import { cookies } from 'next/headers';
+
+const rzp = new Razorpay({ key_id: process.env.RAZORPAY_KEY_ID, key_secret: process.env.RAZORPAY_KEY_SECRET });
+const jar = await cookies();
+const notes = {
+  ml_visitor_id: jar.get('ml_vid')?.value ?? '',
+  ml_session_id: jar.get('ml_sid')?.value ?? '',
+  ml_site_id: '${site.id}',
+};
+
+const order = await rzp.orders.create({ amount: 49900, currency: 'INR', notes });
+// Payment links: rzp.paymentLink.create({ ..., notes, callback_url: 'https://${site.domain}/thanks', callback_method: 'get' })`}</Code>
+            </div>
+            <p className="mt-2 text-stone-500">
+              Using Razorpay Checkout in the browser? Put the same keys in the checkout's <code>notes</code> option, reading the ids with{' '}
+              <code>window.minilytics.attribution()</code>.
+            </p>
+          </li>
+          <li>
+            <b>Recommended for payment links:</b> set the callback URL to a page on your site with <code>callback_method: 'get'</code>. Razorpay
+            adds <code>?razorpay_payment_id=…</code> to it, which links the payment to the visitor even without notes.
           </li>
         </ol>
       </Section>

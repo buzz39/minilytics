@@ -198,11 +198,13 @@ export async function ingest(
 }
 
 /**
- * Dodo sends buyers back to your return URL with ?payment_id=pay_... . Seeing that on a pageview tells us
- * exactly which visitor made the payment, even when the checkout had no metadata.
+ * Dodo sends buyers back to your return URL with ?payment_id=pay_... , and Razorpay payment links send them
+ * to their callback URL with ?razorpay_payment_id=pay_... . Seeing that on a pageview tells us exactly which
+ * visitor made the payment, even when the checkout had no metadata.
  */
 function claimPayment(db: D1Database, siteId: string, vid: string, url: URL, now: number): D1PreparedStatement[] {
-  const paymentId = url.searchParams.get('payment_id') ?? url.searchParams.get('subscription_id');
+  const q = url.searchParams;
+  const paymentId = q.get('payment_id') ?? q.get('razorpay_payment_id') ?? q.get('subscription_id');
   if (!paymentId || !/^(pay|sub)_[\w-]{4,64}$/.test(paymentId)) return [];
   return [
     db

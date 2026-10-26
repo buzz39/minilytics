@@ -2,7 +2,8 @@ import { createHmac } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { classify } from '../src/shared/sources';
 import { belongsTo, normalizePath } from '../src/worker/collect';
-import { verifyStandardWebhook } from '../src/worker/lib/crypto';
+import { verifyRazorpaySignature, verifyStandardWebhook } from '../src/worker/lib/crypto';
+import { parseRazorpayEvent, razorpayAccepts } from '../src/worker/razorpay';
 import { bucketLabels, resolveRange, startOfDay, tzOffset } from '../src/worker/lib/time';
 import { isBot, parseUA } from '../src/worker/lib/ua';
 
@@ -98,5 +99,94 @@ describe('Standard Webhooks (Dodo)', () => {
   it('rejects tampering and stale timestamps', async () => {
     expect(await verifyStandardWebhook(secret, { id: 'msg_1', timestamp: ts, signature: `v1,${sig}` }, body + ' ')).toBe(false);
     expect(await verifyStandardWebhook(secret, { id: 'msg_1', timestamp: String(Number(ts) - 3600), signature: `v1,${sig}` }, body)).toBe(false);
+  });
+});
+
+describe('Razorpay webhooks', () => {
+  const secret = 'rzp-webhook-secret';
+  const body = '{"event":"payment.captured"}';
+  const sig = createHmac('sha256', secret).update(body).digest('hex');
+
+  it('verifies the hex HMAC signature', async () => {
+    expect(await verifyRazorpaySignature(secret, sig, body)).toBe(true);
+    expect(await verifyRazorpaySignature(secret, sig.toUpperCase(), body)).toBe(true);
+    expect(await verifyRazorpaySignature(secret, sig, body + ' ')).toBe(false);
+    expect(await verifyRazorpaySignature('other', sig, body)).toBe(false);
+    expect(await verifyRazorpaySignature(secret, null, body)).toBe(false);
+  });
+
+  const captured = (extra: Record<string, any> = {}, payment: Record<string, any> = {}) => ({
+    event: 'payment.captured',
+    created_at: 1761500000,
+    payload: {
+      payment: {
+        entity: {
+          id: 'pay_Abc123XYZ', amount: 49900, currency: 'INR', status: 'captured', created_at: 1761499990,
+          email: 'Jane@Acme.com', customer_id: 'cust_1', notes: [], ...payment,
+        },
+      },
+      ...extra,
+    },
+  });
+
+  it('reads a captured payment in paise, with visitor ids from order notes', () => {
+    const e = parseRazorpayEvent(
+      captured({ order: { entity: { id: 'order_1', notes: { ml_visitor_id: 'v1', ml_session_id: 's1' } } } }),
+      'INR',
+    );
+    expect(e).toMatchObject({
+      type: 'payment',
+      payment: { id: 'pay_Abc123XYZ', provider: 'razorpay', amount: 49900, currency: 'INR', ts: 1761499990000,
+                 visitorId: 'v1', sessionId: 's1', email: 'jane@acme.com', customerId: 'cust_1' },
+    });
+  });
+
+  it('lets payment notes win and drops the placeholder email', () => {
+    const e = parseRazorpayEvent(
+      captured({ order: { entity: { notes: { ml_visitor_id: 'from-order' } } } }, { email: 'void@razorpay.com', notes: { ml_visitor_id: 'from-pay' } }),
+      'INR',
+    );
+    expect(e?.type === 'payment' && e.payment).toMatchObject({ visitorId: 'from-pay', email: null });
+  });
+
+  it('uses the settled INR amount for international payments', () => {
+    const e = parseRazorpayEvent(captured({}, { amount: 600, currency: 'USD', base_amount: 49900, base_currency: 'INR' }), 'INR');
+    expect(e?.type === 'payment' && e.payment).toMatchObject({ amount: 49900, currency: 'INR' });
+  });
+
+  it('reads payment links and subscriptions, with ids for filtering', () => {
+    const link = parseRazorpayEvent(
+      { event: 'payment_link.paid', payload: { payment: captured().payload.payment,
+        payment_link: { entity: { id: 'plink_9', notes: { ml_visitor_id: 'v9' }, customer: { name: 'Jane' } } } } },
+      'INR',
+    );
+    expect(link).toMatchObject({ filterIds: ['plink_9'], payment: { visitorId: 'v9', name: 'Jane' } });
+    const sub = parseRazorpayEvent(
+      { event: 'subscription.charged', payload: { payment: captured().payload.payment,
+        subscription: { entity: { id: 'sub_7', plan_id: 'plan_3', customer_id: 'cust_2' } } } },
+      'INR',
+    );
+    expect(sub).toMatchObject({ filterIds: ['plan_3'], payment: { subscriptionId: 'sub_7', customerId: 'cust_1' } });
+  });
+
+  it('reads refunds and ignores events that move no money', () => {
+    expect(
+      parseRazorpayEvent({ event: 'refund.processed', payload: { refund: { entity: { id: 'rfnd_1', payment_id: 'pay_1', amount: 100, currency: 'INR', created_at: 1 } } } }, 'INR'),
+    ).toEqual({ type: 'refund', refundId: 'rfnd_1', paymentId: 'pay_1', amount: 100, currency: 'INR', ts: 1000 });
+    expect(parseRazorpayEvent({ event: 'payment.failed', payload: captured().payload }, 'INR')).toBeNull();
+    expect(parseRazorpayEvent(captured({}, { status: 'authorized' }), 'INR')).toBeNull();
+  });
+
+  it('filters payments by site tag or link/plan ids', () => {
+    const e = parseRazorpayEvent(
+      { event: 'payment_link.paid', payload: { payment: captured().payload.payment, payment_link: { entity: { id: 'plink_9' } } } },
+      'INR',
+    );
+    if (e?.type !== 'payment') throw new Error('expected payment');
+    expect(razorpayAccepts({ id: 'site1', razorpay_filter_ids: null }, e)).toBe(true);
+    expect(razorpayAccepts({ id: 'site1', razorpay_filter_ids: 'plink_9,plan_3' }, e)).toBe(true);
+    expect(razorpayAccepts({ id: 'site1', razorpay_filter_ids: 'plink_other' }, e)).toBe(false);
+    expect(razorpayAccepts({ id: 'site1', razorpay_filter_ids: 'plink_other' }, { ...e, siteTag: 'site1' })).toBe(true);
+    expect(razorpayAccepts({ id: 'site1', razorpay_filter_ids: null }, { ...e, siteTag: 'site2' })).toBe(false);
   });
 });

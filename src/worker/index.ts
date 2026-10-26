@@ -6,6 +6,7 @@ import { clearSession, currentUser, googleCallback, googleStart, isHosted, requi
 import { billingWebhook, checkout, planInfo } from './billing';
 import { passwordsMatch, randomId } from './lib/crypto';
 import { handleDodoWebhook, handleGoalApi, handlePaymentApi, rematchPayments } from './payments';
+import { handleRazorpayWebhook } from './razorpay';
 import { breakdown, customers, funnel, makeCtx, overview, realtime, visitorProfile, visitors, type FunnelStep } from './stats';
 
 const app = new Hono<AppEnv>();
@@ -17,6 +18,7 @@ const LOCKOUT_MS = 15 * 60_000;
 app.use('/api/event', cors({ origin: '*', allowMethods: ['POST', 'OPTIONS'], maxAge: 86400 }));
 app.post('/api/event', handleEvent);
 app.post('/api/webhooks/dodo/:siteId', handleDodoWebhook);
+app.post('/api/webhooks/razorpay/:siteId', handleRazorpayWebhook);
 app.post('/api/v1/payments', handlePaymentApi);
 app.post('/api/v1/goals', handleGoalApi);
 
@@ -104,7 +106,11 @@ function validTimezone(tz: string) {
   }
 }
 
-const publicSite = (s: Site) => ({ ...s, dodo_webhook_secret: s.dodo_webhook_secret ? '••••••••' : null });
+const publicSite = (s: Site) => ({
+  ...s,
+  dodo_webhook_secret: s.dodo_webhook_secret ? '••••••••' : null,
+  razorpay_webhook_secret: s.razorpay_webhook_secret ? '••••••••' : null,
+});
 
 app.get('/api/sites', async (c) => {
   const now = Date.now();
@@ -176,10 +182,28 @@ app.patch('/api/sites/:id', async (c) => {
     const ids = b.dodo_product_ids.split(/[\s,]+/).filter((x) => /^pdt_[\w-]+$/.test(x));
     next.dodo_product_ids = ids.join(',') || null;
   }
+  if (typeof b.razorpay_webhook_secret === 'string' && !b.razorpay_webhook_secret.includes('•')) {
+    next.razorpay_webhook_secret = b.razorpay_webhook_secret.trim() || null;
+  }
+  if (typeof b.razorpay_filter_ids === 'string') {
+    const ids = b.razorpay_filter_ids.split(/[\s,]+/).filter((x) => /^(plink|plan)_[\w-]+$/.test(x));
+    next.razorpay_filter_ids = ids.join(',') || null;
+  }
   await c.env.DB.prepare(
-    'UPDATE sites SET name = ?, domain = ?, timezone = ?, currency = ?, dodo_webhook_secret = ?, dodo_product_ids = ? WHERE id = ?',
+    `UPDATE sites SET name = ?, domain = ?, timezone = ?, currency = ?, dodo_webhook_secret = ?, dodo_product_ids = ?,
+       razorpay_webhook_secret = ?, razorpay_filter_ids = ? WHERE id = ?`,
   )
-    .bind(next.name, next.domain, next.timezone, next.currency, next.dodo_webhook_secret, next.dodo_product_ids ?? null, site.id)
+    .bind(
+      next.name,
+      next.domain,
+      next.timezone,
+      next.currency,
+      next.dodo_webhook_secret,
+      next.dodo_product_ids ?? null,
+      next.razorpay_webhook_secret ?? null,
+      next.razorpay_filter_ids ?? null,
+      site.id,
+    )
     .run();
   forgetSite(site.id);
   return c.json(publicSite(next));
