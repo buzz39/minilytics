@@ -1,7 +1,7 @@
 import type { Context } from 'hono';
 import { getSite, type AppEnv, type Site } from './env';
 import { verifyRazorpaySignature } from './lib/crypto';
-import { attribute, recordPayment, type PaymentInput } from './payments';
+import { recordPayment, type PaymentInput } from './payments';
 
 type Entity = Record<string, any>;
 
@@ -154,30 +154,8 @@ export async function handleRazorpayWebhook(c: Context<AppEnv>) {
 
   if (!razorpayAccepts(site, parsed)) return c.json({ ok: true, ignored: 'other product' });
 
-  const p = parsed.payment;
-  const existing = await db
-    .prepare('SELECT visitor_id FROM payments WHERE id = ? AND site_id = ?')
-    .bind(p.id, site.id)
-    .first<{ visitor_id: string | null }>();
-  if (!existing) {
-    await recordPayment(db, site, p);
-    return c.json({ ok: true });
-  }
-  // Already recorded by an earlier event for the same payment (payment.captured usually beats payment_link.paid).
-  // A later event can carry notes the first one lacked, so try again to link it to a visitor.
-  if (!existing.visitor_id && p.visitorId) {
-    const a = await attribute(db, site, p);
-    if (a.visitorId) {
-      await db.batch([
-        db
-          .prepare('UPDATE payments SET visitor_id = ?, session_id = ?, matched_by = ?, renewal = ? WHERE site_id = ? AND id = ? AND visitor_id IS NULL')
-          .bind(a.visitorId, a.sessionId, a.matchedBy, a.renewal ? 1 : 0, site.id, p.id),
-        db.prepare('INSERT OR IGNORE INTO visitors (site_id, id, first_seen) VALUES (?, ?, ?)').bind(site.id, a.visitorId, p.ts),
-        db
-          .prepare('UPDATE visitors SET email = COALESCE(email, ?), name = COALESCE(name, ?) WHERE site_id = ? AND id = ?')
-          .bind(p.email ?? null, p.name ?? null, site.id, a.visitorId),
-      ]);
-    }
-  }
-  return c.json({ ok: true, duplicate: true });
+  // One payment fires several events (payment.captured, then order.paid / payment_link.paid). recordPayment
+  // merges them into one row and fills in the visitor if a later event carries the notes the first lacked.
+  await recordPayment(db, site, parsed.payment);
+  return c.json({ ok: true });
 }
