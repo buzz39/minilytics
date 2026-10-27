@@ -16,10 +16,10 @@
     "build": "vite build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "db:migrate:local": "wrangler d1 migrations apply minilytics --local",
-    "db:migrate": "wrangler d1 migrations apply minilytics --remote",
-    "deploy": "vite build && wrangler d1 migrations apply minilytics --remote && wrangler deploy",
-    "seed": "node scripts/seed-demo.mjs && wrangler d1 execute minilytics --local --file .wrangler/seed.sql",
+    "db:migrate:local": "wrangler d1 migrations apply DB --local",
+    "db:migrate": "wrangler d1 migrations apply DB --remote",
+    "deploy": "vite build && wrangler deploy && npm run db:migrate",
+    "seed": "node scripts/seed-demo.mjs && wrangler d1 execute DB --local --file .wrangler/seed.sql",
     "smoke": "node scripts/smoke.mjs"
   },
   "dependencies": {
@@ -43,5 +43,18 @@
     "vite": "^6.4.5",
     "vitest": "^3.2.7",
     "wrangler": "^4.152.0"
+  },
+  "cloudflare": {
+    "bindings": {
+      "ADMIN_PASSWORD": {
+        "description": "The password you will log in to your dashboard with. Use a strong one (12+ characters)."
+      },
+      "SESSION_SECRET": {
+        "description": "Any long random string; it signs your login cookie. Generate one with `openssl rand -hex 32` or at [random.org](https://www.random.org/strings/?num=1&len=32&digits=on&upperalpha=on&loweralpha=on&unique=on&format=html&rnd=new)."
+      },
+      "DB": {
+        "description": "Stores your visitors, events and payments. Created for you on Cloudflare D1 (free plan)."
+      }
+    }
   }
 }

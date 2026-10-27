@@ -4,6 +4,8 @@ Revenue-first web analytics for your own websites, inspired by DataFast. It show
 tweet, article, Google page or AI assistant), what they did, and **which source made you money**. It runs on
 Cloudflare's free plan.
 
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/buzz39/minilytics)
+
 ![Dashboard](docs/dashboard.png)
 
 ## Sponsors
@@ -46,65 +48,48 @@ Cloudflare's free plan.
 - Click any row to filter the whole dashboard (for example "only visitors from the launch tweet")
 - Multiple websites, one login
 
-## Deploy for free (about 10 minutes)
+## Deploy for free (one click)
+
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/buzz39/minilytics)
 
 Every person deploys **their own copy** on their own free Cloudflare account. Your data stays on your account, and you
 get your own dashboard with its own password.
 
-You need a free [Cloudflare account](https://dash.cloudflare.com/sign-up), [Node.js 20+](https://nodejs.org) and Git.
-Run these commands in a terminal on your computer. You only do this once; afterwards the app runs on Cloudflare.
+1. Click the button and sign in to Cloudflare (a free account is enough) and GitHub or GitLab.
+2. Keep the suggested names. The **DB** database is created for you.
+3. Fill in the two secrets: **ADMIN_PASSWORD** (what you'll log in with) and **SESSION_SECRET** (any long random
+   string, e.g. the output of `openssl rand -hex 32`).
+4. Click **Create and deploy**.
 
-**1. Download the code and log in to Cloudflare**
-
-```bash
-git clone https://github.com/surendrapandar/minilytics.git
-cd minilytics
-npm install
-npx wrangler login          # opens your browser; click "Allow"
-```
-
-**2. Create the database**
-
-```bash
-npx wrangler d1 create minilytics
-```
-
-If Wrangler asks *"Would you like Wrangler to add it on your behalf?"*, answer **No**. Answer **No** to the optional
-"Cloudflare skills" questions too. Then copy the printed `database_id` and paste it into `wrangler.jsonc`, replacing
-`00000000-0000-0000-0000-000000000000`. There must be exactly **one** entry under `d1_databases`, with `"binding": "DB"`.
-
-**3. Set your password and a signing secret**
-
-```bash
-npx wrangler secret put ADMIN_PASSWORD     # the password you'll log in with (use a strong one)
-npx wrangler secret put SESSION_SECRET     # any long random text, e.g. the output of: openssl rand -hex 32
-```
-
-Typing is hidden; that's normal. If asked *"There doesn't seem to be a Worker called minilytics… create it?"*, answer **Yes**.
-
-**4. Deploy**
-
-```bash
-npm run deploy
-```
-
-This builds the dashboard, creates the database tables and deploys. It prints your link, e.g.
+Cloudflare copies this repo into your account, creates the database and its tables, and deploys. Your link looks like
 `https://minilytics.<you>.workers.dev`. Open it, log in, add a website and copy its script tag. Each site's Settings
 page also has a **Copy AI prompt** button that lets Claude Code / Cursor do the install in your codebase for you.
 
-If you see `fetch failed`, it's a network hiccup (VPN, proxy, Wi-Fi). Run `npm run deploy` again.
+Every push to your copy of the repo redeploys automatically (Workers & Pages → minilytics → Settings → Builds). To get
+new versions of Minilytics, sync your copy with this repo (GitHub: **Sync fork**, or pull and push).
 
 You can attach a custom domain such as `analytics.yourdomain.com` in Cloudflare → Workers & Pages → minilytics →
 Settings → Domains & Routes.
 
-**Updating later**
+<details>
+<summary><b>Deploy from your terminal instead</b></summary>
+
+You need [Node.js 20+](https://nodejs.org) and Git.
 
 ```bash
-git stash          # keeps your database_id edit in wrangler.jsonc safe
-git pull
-git stash pop
-npm run deploy
+git clone https://github.com/buzz39/minilytics.git
+cd minilytics
+npm install
+npx wrangler login                          # opens your browser; click "Allow"
+npm run deploy                              # creates the database and its tables, then deploys
+npx wrangler secret put ADMIN_PASSWORD      # the password you'll log in with (use a strong one)
+npx wrangler secret put SESSION_SECRET      # any long random text, e.g. the output of: openssl rand -hex 32
 ```
+
+Typing a secret is hidden; that's normal. If you see `fetch failed`, it's a network hiccup (VPN, proxy, Wi-Fi): run the
+command again. To update later: `git pull && npm run deploy`.
+
+</details>
 
 ### What the free plan covers
 
