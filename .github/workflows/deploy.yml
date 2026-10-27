@@ -1,0 +1,76 @@
+# Deploys Minilytics to your own Cloudflare account on every push to the `deploy` branch (or by hand from the Actions tab).
+#
+# One-time setup, in this repo → Settings → Secrets and variables → Actions → New repository secret:
+#   CLOUDFLARE_API_TOKEN   token with Workers Scripts: Edit, D1: Edit, Account Settings: Read
+#   CLOUDFLARE_ACCOUNT_ID  from the Cloudflare dashboard (Workers & Pages → right-hand sidebar)
+#   ADMIN_PASSWORD         the password you'll log in to the dashboard with
+#
+# The D1 database is created on the first run and found again on later runs, and SESSION_SECRET is generated once.
+name: Deploy to Cloudflare
+
+on:
+  push:
+    branches: [deploy]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Check secrets
+        env:
+          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+        run: |
+          missing=""
+          [ -n "$CLOUDFLARE_API_TOKEN" ] || missing="$missing CLOUDFLARE_API_TOKEN"
+          [ -n "$CLOUDFLARE_ACCOUNT_ID" ] || missing="$missing CLOUDFLARE_ACCOUNT_ID"
+          [ -n "$ADMIN_PASSWORD" ] || missing="$missing ADMIN_PASSWORD"
+          if [ -n "$missing" ]; then echo "::error::Add these repository secrets first:$missing"; exit 1; fi
+
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm test
+
+      - name: Find or create the D1 database
+        run: |
+          find_id() {
+            npx wrangler d1 list --json | node -e '
+              let s = ""; process.stdin.on("data", d => s += d).on("end", () => {
+                const db = JSON.parse(s.slice(s.indexOf("["))).find(d => d.name === "minilytics");
+                process.stdout.write(db ? db.uuid : "");
+              });'
+          }
+          id="$(find_id)"
+          if [ -z "$id" ]; then
+            npx wrangler d1 create minilytics --location apac
+            id="$(find_id)"
+          fi
+          [ -n "$id" ] || { echo "::error::Could not create or find the minilytics D1 database"; exit 1; }
+          sed -i "s/00000000-0000-0000-0000-000000000000/$id/" wrangler.jsonc
+          echo "D1 database: $id"
+
+      - name: Build, migrate and deploy
+        run: npm run deploy
+
+      - name: Set secrets
+        env:
+          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+        run: |
+          printf '%s' "$ADMIN_PASSWORD" | npx wrangler secret put ADMIN_PASSWORD
+          if ! npx wrangler secret list | grep -q '"SESSION_SECRET"'; then
+            openssl rand -hex 32 | tr -d '\n' | npx wrangler secret put SESSION_SECRET
+          fi
