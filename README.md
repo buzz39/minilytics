@@ -12,17 +12,22 @@ Cloudflare's free plan.
 
 <table>
   <tr>
-    <td align="center" width="33%">
+    <td align="center" width="25%">
+      <a href="https://snitchfeed.com/?utm_source=minilytics&utm_medium=sponsorship&utm_campaign=oss-sponsor&utm_content=github-readme"><img src="docs/sponsors/snitchfeed.png" width="64" height="64" alt="SnitchFeed"></a><br>
+      <a href="https://snitchfeed.com/?utm_source=minilytics&utm_medium=sponsorship&utm_campaign=oss-sponsor&utm_content=github-readme"><b>SnitchFeed</b></a><br>
+      <sub>Agentic social listening for GTM: X, LinkedIn, Reddit &amp; more</sub>
+    </td>
+    <td align="center" width="25%">
       <a href="https://diskmate.app/?ref=minilytics-github"><img src="docs/sponsors/diskmate.svg" width="64" height="64" alt="DiskMate"></a><br>
       <a href="https://diskmate.app/?ref=minilytics-github"><b>DiskMate</b></a><br>
       <sub>Disk space analyzer &amp; cleaner for Mac</sub>
     </td>
-    <td align="center" width="33%">
+    <td align="center" width="25%">
       <a href="https://pastebuddy.app/?ref=minilytics-github"><img src="docs/sponsors/pastebuddy.svg" width="64" height="64" alt="PasteBuddy"></a><br>
       <a href="https://pastebuddy.app/?ref=minilytics-github"><b>PasteBuddy</b></a><br>
       <sub>Clipboard history for Mac: never lose what you copy</sub>
     </td>
-    <td align="center" width="33%">
+    <td align="center" width="25%">
       <a href="https://checkout.dodopayments.com/buy/pdt_0NqWPM98xzStsrTUMLyxE?quantity=1"><b>Your logo here</b></a><br>
       <sub>Reach indie hackers and developers who self-host their analytics</sub><br><br>
       <a href="https://checkout.dodopayments.com/buy/pdt_0NqWPM98xzStsrTUMLyxE?quantity=1">Become a sponsor →</a>
@@ -119,6 +124,9 @@ npx wrangler secret put PLAN_PRICE              # e.g. $29
 npx wrangler secret put PLAN_INTERVAL           # lifetime | month | year
 npx wrangler secret put PLAN_SPOTS              # e.g. 5 ("3 of 5 spots left"); optional
 npx wrangler secret put PLAN_NEXT_PRICE         # e.g. $49 ("…, then $49"); optional
+npx wrangler secret put PLAN_TIERS              # optional: "$29:5, $49:pdt_b:5, $100" steps the price up as spots sell
+                                                # (one Dodo product per price; no pdt_ = sold out or only announced).
+                                                # Replaces PRICE/SPOTS/NEXT_PRICE; sold-out prices show as "5 sold at $29"
 npx wrangler secret put SUPPORT_EMAIL           # shown on pricing, billing and legal pages
 npm run deploy
 ```
@@ -152,7 +160,11 @@ https://yoursite.com/?ref=launch-tweet            (short version)
 For SEO, Google never shares the search keyword, but **Entry page** with the **Google** referrer tells you which
 article people found you through.
 
-## Revenue attribution with Dodo Payments
+## Revenue attribution
+
+Pick your provider in site settings → **Connect payments**.
+
+### Dodo Payments
 
 1. In Dodo → Developer → Webhooks, add `https://YOUR-HOST/api/webhooks/dodo/SITE_ID` and subscribe to
    `payment.succeeded` and `refund.succeeded`. Paste the signing secret (`whsec_…`) into the site settings.
@@ -173,32 +185,65 @@ Using Dodo **payment links**? The script adds `metadata_ml_visitor_id` / `metada
    script. Dodo adds `?payment_id=…` to it, and Minilytics uses that to link the payment to the exact visitor even when
    metadata doesn't come through.
 
-**How credit is given:** a payment goes to the paying visitor's last visit that came from a real source (last non-direct
-touch). So "clicked a tweet, came back directly 17 days later and paid" is credited to the tweet. If metadata is
-missing, Minilytics tries, in order: the return page (`?payment_id=`), an earlier payment by the same customer
-(renewals), an email you `identify()`'d, and finally checkout timing (used only when exactly one visitor clicked a Dodo
-checkout link in the 3 hours before the payment). The Journey tab shows how each payment was matched, and **Try
-matching again** re-runs this for older payments.
-Refunds are subtracted from revenue.
+### Stripe
 
-## Revenue attribution with Razorpay
+1. In Stripe → Developers → Webhooks, add `https://YOUR-HOST/api/webhooks/stripe/SITE_ID` and subscribe to
+   `checkout.session.completed`, `invoice.paid` and `charge.refunded`. Paste the signing secret (`whsec_…`) into the
+   site settings.
+2. Pass the visitor cookies as metadata when creating a Checkout Session, and add `{CHECKOUT_SESSION_ID}` to the success URL:
 
-1. In Razorpay → Account & Settings → Webhooks, add `https://YOUR-HOST/api/webhooks/razorpay/SITE_ID`, type a secret, and select `payment.captured`, `order.paid`, `payment_link.paid`, `subscription.charged` and `refund.processed`. Paste the same secret into the site settings.
-2. Pass the visitor cookies as **notes** on the order, payment link, subscription, or the Checkout `notes` option:
-
+```ts
+const jar = await cookies(); // next/headers
+await stripe.checkout.sessions.create({
+  // ...your existing options
+  success_url: 'https://yoursite.com/thanks?session_id={CHECKOUT_SESSION_ID}',
+  metadata: { ml_visitor_id: jar.get('ml_vid')?.value ?? '', ml_session_id: jar.get('ml_sid')?.value ?? '' },
+});
 ```
-const order = await rzp.orders.create({
+
+Using Stripe **Payment Links** (`buy.stripe.com`)? The script puts the visitor in `client_reference_id` when the link is
+clicked (unless you already set your own). Set the link's confirmation page to redirect to
+`https://yoursite.com/thanks?session_id={CHECKOUT_SESSION_ID}` so the payment is also matched on the return page.
+
+Subscription renewals (`invoice.paid`) are credited to the visitor who first subscribed. Refunds are subtracted.
+
+### Razorpay
+
+1. In Razorpay → Account & Settings → Webhooks, add `https://YOUR-HOST/api/webhooks/razorpay/SITE_ID`, type a secret,
+   and select `payment.captured`, `order.paid`, `payment_link.paid`, `subscription.charged` and `refund.processed`.
+   Paste the same secret into the site settings. Set the site's currency to INR (Razorpay amounts are in paise).
+2. Pass the visitor cookies as **notes** on the order, payment link or subscription (or the Checkout `notes` option):
+
+```ts
+const jar = await cookies(); // next/headers
+await razorpay.orders.create({
   amount: 49900, currency: 'INR',
   notes: { ml_visitor_id: jar.get('ml_vid')?.value ?? '', ml_session_id: jar.get('ml_sid')?.value ?? '', ml_site_id: 'SITE_ID' },
 });
 ```
 
-- Notes are read from the payment, order, payment link and subscription, so it doesn't matter which one you put them on. One payment firing several events (`payment.captured` + `order.paid`) is counted once.
-- **Payment links:** set `callback_url` to a page on your site with `callback_method: 'get'`. Razorpay adds `?razorpay_payment_id=…`, which links the payment to the visitor even without notes. Clicks on `rzp.io` / `razorpay.com` links also feed the timing fallback.
-- **One Razorpay account, several products:** every webhook receives every payment. Add `ml_site_id` to the notes, or list the site's `plink_…` / `plan_…` ids in settings, to count only this site's payments.
-- International payments are counted in INR using Razorpay's settled `base_amount` when the site currency is INR. A partial refund of an international payment is counted as a full refund.
+Notes are read from the payment, order, payment link and subscription, and one payment firing several events
+(`payment.captured` + `order.paid`) is counted once. For **payment links**, set `callback_url` to a page on your site
+with `callback_method: 'get'`: Razorpay adds `?razorpay_payment_id=…`, which links the payment even without notes.
+Clicks on `rzp.io` / `razorpay.com` links also feed the timing fallback.
 
-Other providers can use the generic API (the key is in site settings):
+One Razorpay account selling several sites' products? Every webhook receives every payment, so add `ml_site_id` to the
+notes, or list the site's `plink_…` / `plan_…` ids in settings. International payments use Razorpay's settled INR
+`base_amount`; a partial refund of one is counted as a full refund.
+
+### How credit is given
+
+A payment goes to the paying visitor's last visit that came from a real source (last non-direct
+touch). So "clicked a tweet, came back directly 17 days later and paid" is credited to the tweet. If metadata is
+missing, Minilytics tries, in order: the return page (`?payment_id=` / `?session_id=` / `?razorpay_payment_id=`), an earlier payment by the same customer
+(renewals), an email you `identify()`'d, and finally checkout timing (used only when exactly one visitor clicked a Dodo,
+Stripe or Razorpay checkout link in the 3 hours before the payment). The Journey tab shows how each payment was matched, and **Try
+matching again** re-runs this for older payments.
+Refunds are subtracted from revenue.
+
+### Other providers (API)
+
+Any other provider can use the generic API (the key is in site settings):
 
 ```bash
 curl -X POST https://YOUR-HOST/api/v1/payments -H "Authorization: Bearer ml_..." -H "Content-Type: application/json" \
